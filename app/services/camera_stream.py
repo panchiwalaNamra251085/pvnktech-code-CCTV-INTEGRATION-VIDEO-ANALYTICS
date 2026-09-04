@@ -1,59 +1,63 @@
 import cv2
 import time
+from ultralytics import YOLO
 
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+VIDEO_SOURCE = "http://10.83.197.157:8080/video"
+
+MODEL_PATH = "yolo26n.pt"
+
+CONFIDENCE = 0.30
+
+WINDOW_NAME = "CCTV AI - Mobile Camera"
+
+
+# ============================================================
+# CAMERA STREAM
+# ============================================================
 
 class CameraStream:
-    """
-    Handles a live RTSP camera stream.
-    """
 
     def __init__(
         self,
-        rtsp_url: str,
+        video_source: str,
         reconnect_delay: int = 3,
     ):
-        self.rtsp_url = rtsp_url
+        self.video_source = video_source
         self.reconnect_delay = reconnect_delay
         self.capture = None
 
     def connect(self) -> bool:
-        """
-        Connect to the RTSP stream.
-        """
 
         self.release()
 
-        print(
-            f"Connecting to RTSP stream: {self.rtsp_url}"
-        )
+        print()
+        print("=" * 60)
+        print(f"Connecting to camera:")
+        print(self.video_source)
+        print("=" * 60)
 
         self.capture = cv2.VideoCapture(
-            self.rtsp_url
+            self.video_source
         )
 
         if not self.capture.isOpened():
-            print(
-                "Failed to connect to RTSP stream."
-            )
+
+            print("[ERROR] Failed to connect to camera")
 
             self.release()
 
             return False
 
-        print(
-            "RTSP stream connected successfully."
-        )
+        print("[INFO] Camera connected successfully")
 
         return True
 
     def read(self):
-        """
-        Read one frame from the stream.
-
-        Returns:
-            frame if successful
-            None if unsuccessful
-        """
 
         if self.capture is None:
             return None
@@ -66,83 +70,188 @@ class CameraStream:
         return frame
 
     def release(self):
-        """
-        Release the video stream.
-        """
 
         if self.capture is not None:
+
             self.capture.release()
+
             self.capture = None
 
-    def run(self):
-        """
-        Continuously read frames.
 
-        This will later become the main
-        video-processing loop for YOLO.
-        """
+# ============================================================
+# LOAD YOLO
+# ============================================================
 
-        while True:
+print()
+print("[INFO] Loading YOLO model...")
 
-            # ------------------------------------------------
-            # Connect
-            # ------------------------------------------------
-            if self.capture is None:
+model = YOLO(MODEL_PATH)
 
-                connected = self.connect()
+print("[INFO] YOLO model loaded successfully")
 
-                if not connected:
-                    print(
-                        f"Retrying in "
-                        f"{self.reconnect_delay} seconds..."
-                    )
 
-                    time.sleep(
-                        self.reconnect_delay
-                    )
+# ============================================================
+# CREATE CAMERA
+# ============================================================
 
-                    continue
+camera = CameraStream(
+    VIDEO_SOURCE
+)
 
-            # ------------------------------------------------
-            # Read frame
-            # ------------------------------------------------
-            frame = self.read()
 
-            if frame is None:
+# ============================================================
+# FPS
+# ============================================================
+
+previous_time = time.time()
+
+
+# ============================================================
+# MAIN LOOP
+# ============================================================
+
+try:
+
+    while True:
+
+        # ----------------------------------------------------
+        # CONNECT CAMERA
+        # ----------------------------------------------------
+
+        if camera.capture is None:
+
+            connected = camera.connect()
+
+            if not connected:
 
                 print(
-                    "Frame read failed. "
-                    "Reconnecting..."
+                    f"[INFO] Retrying in "
+                    f"{camera.reconnect_delay} seconds..."
                 )
 
-                self.release()
-
                 time.sleep(
-                    self.reconnect_delay
+                    camera.reconnect_delay
                 )
 
                 continue
 
-            # ------------------------------------------------
-            # Frame information
-            # ------------------------------------------------
-            height, width = frame.shape[:2]
+
+        # ----------------------------------------------------
+        # READ FRAME
+        # ----------------------------------------------------
+
+        frame = camera.read()
+
+        if frame is None:
 
             print(
-                f"Frame received: "
-                f"{width}x{height}"
+                "[WARNING] Frame read failed"
             )
 
-            # ------------------------------------------------
-            # Temporary stop condition
-            #
-            # Later this section will contain:
-            # YOLO detection
-            # tracking
-            # event generation
-            # frame streaming
-            # ------------------------------------------------
+            print(
+                "[INFO] Reconnecting..."
+            )
 
+            camera.release()
+
+            time.sleep(
+                camera.reconnect_delay
+            )
+
+            continue
+
+
+        # ----------------------------------------------------
+        # YOLO DETECTION
+        # ----------------------------------------------------
+
+        results = model(
+            frame,
+            conf=CONFIDENCE,
+            verbose=False
+        )
+
+
+        # ----------------------------------------------------
+        # DRAW DETECTIONS
+        # ----------------------------------------------------
+
+        annotated_frame = results[0].plot()
+
+
+        # ----------------------------------------------------
+        # FPS CALCULATION
+        # ----------------------------------------------------
+
+        current_time = time.time()
+
+        fps = 1.0 / max(
+            current_time - previous_time,
+            0.001
+        )
+
+        previous_time = current_time
+
+
+        # ----------------------------------------------------
+        # DISPLAY FPS
+        # ----------------------------------------------------
+
+        cv2.putText(
+            annotated_frame,
+            f"FPS: {fps:.1f}",
+            (20, 35),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1,
+            (0, 255, 0),
+            2
+        )
+
+
+        # ----------------------------------------------------
+        # DISPLAY FRAME
+        # ----------------------------------------------------
+
+        cv2.imshow(
+            WINDOW_NAME,
+            annotated_frame
+        )
+
+
+        # ----------------------------------------------------
+        # KEYBOARD
+        # ----------------------------------------------------
+
+        key = cv2.waitKey(1) & 0xFF
+
+
+        # ESC = EXIT
+
+        if key == 27:
+
+            print()
+            print("[INFO] ESC pressed")
             break
 
-        self.release()
+
+        # Q = EXIT
+
+        if key == ord("q"):
+
+            print()
+            print("[INFO] Q pressed")
+            break
+
+
+finally:
+
+    # ========================================================
+    # CLEANUP
+    # ========================================================
+
+    camera.release()
+
+    cv2.destroyAllWindows()
+
+    print()
+    print("[INFO] CCTV AI stopped")
